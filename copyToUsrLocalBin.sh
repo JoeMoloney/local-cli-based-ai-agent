@@ -1,0 +1,1 @@
+sudo cp local-agent.py /usr/local/bin/
