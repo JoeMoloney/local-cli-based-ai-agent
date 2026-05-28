@@ -83,3 +83,44 @@ Updated the script payload metadata to target the correct available hardware-qua
 ```python
 "model": "gemma3:27b"
 ```
+
+---
+
+## 5. Multi-line Paste Buffer Theft & Terminal Freezing
+### The Issue
+Pasting large multi-line text documents via `Ctrl+Shift+V` caused the terminal to only process the very first line of text while dropping the rest.
+
+### Reason
+Two overlapping buffer conflicts occurred:
+1. **The Newline Submission Trigger**: Standard terminal inputs treat a newline character (`\n`) in copied text as an immediate literal `Enter` keypress, causing the script to submit prematurely.
+2. **Readline Buffer Theft**: The `readline` module eagerly intercepts the operating system's keyboard stream. When using complex low-level `select.select()` listeners alongside `readline`, the raw stream references conflict, clearing out `sys.stdin` and causing the terminal input pipe to hang indefinitely.
+
+### Resolution
+Migrated the script loop to use a combination of automated streaming packet tracking and expanded context configuration metrics. By capturing input data safely and allowing text to stream naturally, the script tracks the incoming string segments and stiches them back together post-stream to catch file creation syntax hooks seamlessly.
+
+---
+
+## 6. Truncated Responses & Skipped Context (Ollama Memory Thresholds)
+### The Issue
+When passing large document blocks (like multi-page code segments or long questionnaires), the local AI would either stop printing mid-sentence without closing code blocks, or silently skip entire text modules from the bottom of the prompt sheet.
+
+### Reason
+By default, Ollama initializes model instances with strict execution boundaries if omitted from the API request:
+* `num_predict` defaults to **2,048 tokens**, hard-capping how long a single model response can be before it kills the stream.
+* `num_ctx` defaults to **2,048 tokens**. Because the tool dynamically injects your folder's active files into the system prompt framework, the context memory window was already mostly full before your prompt text was even pasted, forcing the engine to drop your input lines to fit its memory bounds.
+
+### Resolution
+Injected an explicit `"options"` configuration object directly into the `requests.post` JSON payload to override the default system limits and allocate proper local hardware cache limits:
+
+```python
+response = requests.post("http://localhost:11434/api/generate", json={
+    "model": "gemma3:27b",
+    "system": system_instruction,
+    "prompt": user_input,
+    "stream": True,
+    "options": {
+        "num_ctx": 32768,      # Expands context memory to 32k tokens
+        "num_predict": 4096     # Allows long generation cycles up to 4k tokens
+    }
+}, stream=True)
+```
