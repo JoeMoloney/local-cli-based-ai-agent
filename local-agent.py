@@ -4,6 +4,8 @@ import sys
 import requests
 import json
 import readline
+import re
+import select
 
 def gather_context():
     """Scans the active directory and extracts file contents for the AI context."""
@@ -11,79 +13,124 @@ def gather_context():
     files_context = []
     
     for file in os.listdir(current_dir):
-        # Ignore hidden files, directories, build artifacts, and the script itself
         if os.path.isfile(file) and not file.startswith('.') and file != 'local-codex':
             try:
                 with open(file, 'r', errors='ignore') as f:
-                    files_context.append(f"--- FILE: {file} ---\n{f.read(4000)}\n") # Bumped to 4k chars
+                    files_context.append(f"--- FILE: {file} ---\n{f.read(4000)}\n")
             except Exception:
                 pass
                 
     context_payload = "\n".join(files_context)
-    return f"You are a local CLI terminal coding assistant working inside: {current_dir}.\nHere is the active file content:\n{context_payload}"
+    return (
+        f"You are a local CLI terminal coding assistant working inside: {current_dir}.\n"
+        f"Here is the active file content:\n{context_payload}\n\n"
+        "CRITICAL FILE WRITING CAPABILITY:\n"
+        "If the user asks you to create or modify a file or folder, you can do it by using this EXACT format in your response:\n"
+        "===[CREATE_FILE: path/to/filename.ext]===\n"
+        "Your code or file content here\n"
+        "===[END_FILE]===\n"
+        "You can output multiple file blocks in one response. I will intercept them and save them to disk automatically."
+    )
+
+def handle_file_creation(ai_text):
+    """Parses the AI's response text and writes files/folders to disk."""
+    pattern = r"===\[CREATE_FILE:\s*(.*?)\]===\n(.*?)\n===\[END_FILE\]==="
+    matches = re.findall(pattern, ai_text, re.DOTALL)
+    
+    if not matches:
+        return
+        
+    print("\n💾 File System Updates Detected:")
+    for filepath, content in matches:
+        filepath = filepath.strip()
+        dirname = os.path.dirname(filepath)
+        
+        if dirname and not os.path.exists(dirname):
+            os.makedirs(dirname, exist_ok=True)
+            print(f"  📁 Created directory: {dirname}/")
+            
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(content.strip())
+        print(f"  📄 Written file: {filepath}")
+
+def get_multiline_input():
+    """Reads input normally, but collects full streams instantly if a paste event occurs."""
+    # Read the very first line entered by the user
+    first_line = input("codex> ")
+    lines = [first_line]
+    
+    # Check if there is more text immediately following it in the terminal buffer (pasted data)
+    # 0.1 second timeout is the sweet spot for catching programmatic paste streams
+    while True:
+        ready, _, _ = select.select([sys.stdin], [], [], 0.1)
+        if ready:
+            next_line = sys.stdin.readline().rstrip('\r\n')
+            lines.append(next_line)
+        else:
+            # No more data incoming, paste stream has ended
+            break
+            
+    return "\n".join(lines).strip()
 
 def main():
     print("=" * 60)
-    print(f"Local Codex Interactive Shell Connected to Ollama")
-    print(f"Active Directory: {os.getcwd()}")
-    print("Type 'exit' or 'quit' to close the shell, or 'refresh' to re-scan files.")
+    print(f"🤖 Local Codex (Auto Paste-Detect) Connected to Ollama")
+    print(f"📂 Active Directory: {os.getcwd()}")
+    print("Type normally, or paste blocks freely. Press Enter to send! 👀")
     print("=" * 60)
 
-    # Gather context once at startup
     system_instruction = gather_context()
 
     while True:
         try:
-            # Create a custom prompt indicator
-            user_input = input("\ncodex> ").strip()
+            # Call the smart timing input collector
+            user_input = get_multiline_input()
             
             if not user_input:
                 continue
-                
             if user_input.lower() in ['exit', 'quit']:
                 print("Goodbye!")
                 break
-                
             if user_input.lower() == 'refresh':
-                print("Re-scanning directory for file changes...")
+                print("🔄 Re-scanning directory...")
                 system_instruction = gather_context()
-                print("Context updated.")
+                print("✅ Context updated.")
                 continue
 
-            print("AI-ing... 👀👀👀")
+            print("Thinking... 👀")
             
-            # 1. Set stream to True AND add stream=True to the requests call
             response = requests.post("http://localhost:11434/api/generate", json={
                 "model": "gemma3:27b",
                 "system": system_instruction,
                 "prompt": user_input,
-                "stream": True # <-- Keeps Ollama streaming
-            }, stream=True)    # <-- Tells Python to keep the connection open
-            
+                "stream": True
+            }, stream=True)
+
             if response.status_code == 200:
-                print("\ncodex> ", end="", flush=True)
-                
-                # 2. Loop through the incoming data line-by-line as it arrives
+                print("\n--- AI Response ---")
+                full_response_buffer = []
+
                 for line in response.iter_lines():
                     if line:
                         try:
-                            # Parse each tiny word-chunk JSON object
                             chunk = json.loads(line.decode('utf-8'))
                             word = chunk.get("response", "")
-                            # Print the word instantly without a newline
                             print(word, end="", flush=True)
+                            full_response_buffer.append(word)
                         except Exception:
                             pass
-                print() # Print a final blank line when the stream finishes
-            else:
-                print(f"\nError: Ollama returned status code {response.status_code}")
+                print("\n-------------------")
 
+                complete_text = "".join(full_response_buffer)
+                handle_file_creation(complete_text)
+                
+            else:
+                print(f"\n❌ Error: Ollama returned status code {response.status_code}")
                 
         except KeyboardInterrupt:
-            # Gracefully handle Ctrl+C to clear the line instead of crashing
             print("\nUse 'exit' to quit.")
         except requests.exceptions.ConnectionError:
-            print("\nConnection Error: Is Ollama running? Try 'systemctl status ollama'")
+            print("\n❌ Connection Error: Is Ollama running?")
         except Exception as e:
             print(f"\nAn error occurred: {e}")
 
