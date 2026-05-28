@@ -103,7 +103,11 @@ def main():
                 "model": "gemma3:27b",
                 "system": system_instruction,
                 "prompt": user_input,
-                "stream": True
+                "stream": True,
+                "options": {
+                    "num_ctx": 32768,
+                    "num_predict": 4096
+                }
             }, stream=True)
 
             if response.status_code == 200:
