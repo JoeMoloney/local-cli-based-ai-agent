@@ -12,7 +12,7 @@ from any directory type
 local-agent.py
 
 TODO:
-Clean up formatting
-Add Bash alias instructions
-Add url/port instructions
-Add troubleshooting instructions
+- Clean up formatting
+- Add Bash alias instructions
+- ~~Add troubleshooting instructions~~
+- Provide better instructions on configuring to allow other users to be able to use this
