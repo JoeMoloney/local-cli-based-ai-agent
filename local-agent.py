@@ -2,6 +2,8 @@
 import os
 import sys
 import requests
+import json
+import readline
 
 def gather_context():
     """Scans the active directory and extracts file contents for the AI context."""
@@ -48,21 +50,34 @@ def main():
                 print("Context updated.")
                 continue
 
-            print("Thinking... 👀👀👀")
+            print("AI-ing... 👀👀👀")
             
-            # Post request to local Ollama instance
+            # 1. Set stream to True AND add stream=True to the requests call
             response = requests.post("http://localhost:11434/api/generate", json={
-                "model": "qwen2.5-coder:7b",
+                "model": "gemma3:27b",
                 "system": system_instruction,
                 "prompt": user_input,
-                "stream": False
-            })
+                "stream": True # <-- Keeps Ollama streaming
+            }, stream=True)    # <-- Tells Python to keep the connection open
             
             if response.status_code == 200:
-                ai_response = response.json().get("response", "")
-                print("\n" + ai_response)
+                print("\ncodex> ", end="", flush=True)
+                
+                # 2. Loop through the incoming data line-by-line as it arrives
+                for line in response.iter_lines():
+                    if line:
+                        try:
+                            # Parse each tiny word-chunk JSON object
+                            chunk = json.loads(line.decode('utf-8'))
+                            word = chunk.get("response", "")
+                            # Print the word instantly without a newline
+                            print(word, end="", flush=True)
+                        except Exception:
+                            pass
+                print() # Print a final blank line when the stream finishes
             else:
                 print(f"\nError: Ollama returned status code {response.status_code}")
+
                 
         except KeyboardInterrupt:
             # Gracefully handle Ctrl+C to clear the line instead of crashing
